@@ -18,7 +18,9 @@ GAMEWEEK_BASE_URL = "https://fantasy.premierleague.com/api/event"
 MANAGER_COLS = ['entry', 'player_name', 'entry_name']
 
 CHIP_CONVERSIONS = {'3xc': 'Triple Captain',
-                    'freehit': 'Free Hit', 'bboost': 'Bench Boost'}
+                    'freehit': 'Free Hit',
+                    'bboost': 'Bench Boost',
+                    'wildcard': 'Wildcard'}
 
 
 def get_raw_league_data(league_code: int) -> dict:
@@ -220,7 +222,6 @@ def get_league_rankings_for_gw(
             f"{MANAGER_BASE_URL}/{manager_id}/event/{gameweek}/picks", timeout=10)
         if res.status_code != 200:
             print(res.status_code)
-            print(res.headers)
             raise ConnectionError(
                 f"Could not retrieve gameweek {gameweek} data for manager {manager_id}")
         data = res.json()
@@ -363,24 +364,19 @@ def get_manager_chip_data(manager_id: int, session: requests.Session) -> dict:
             raise RequestException(f"{res.status_code} error")
         data = res.json()
         if data.get('active_chip'):
-            if data['active_chip'] == 'wildcard':
-                if gw < 21:
-                    chip_data.append({
-                        'manager_id': manager_id,
-                        'chip': 'Wildcard 1',
-                        'points': data['entry_history']['points']
-                    })
-                    continue
+            if gw < 20:
                 chip_data.append({
                     'manager_id': manager_id,
-                    'chip': 'Wildcard 2',
+                    'chip': f"{CHIP_CONVERSIONS[data['active_chip']]} 1",
                     'points': data['entry_history']['points']
                 })
                 continue
             chip_data.append({
                 'manager_id': manager_id,
-                'chip': CHIP_CONVERSIONS[data['active_chip']],
-                'points': data['entry_history']['points']})
+                'chip': f"{CHIP_CONVERSIONS[data['active_chip']]} 2",
+                'points': data['entry_history']['points']
+            })
+            continue
     return chip_data
 
 
@@ -392,7 +388,7 @@ def get_league_chip_data(manager_data: pl.DataFrame) -> pl.DataFrame:
     manager_ids = manager_data['manager_id'].to_list()
 
     with requests.Session() as session:
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(3) as executor:
 
             chip_data += list(executor.map(get_manager_chip_data,
                               manager_ids, repeat(session)))
@@ -416,7 +412,7 @@ def get_rankings(league_data: dict, session: requests.Session) -> pl.DataFrame:
 
     rankings_data = pl.DataFrame(rankings_data)
 
-    rankings_data = rankings_data.with_columns(pl.col('entry').apply(
+    rankings_data = rankings_data.with_columns(pl.col('entry').map_elements(
         lambda x: get_manager_rank(x, session)).alias('Overall Rank'))
 
     rankings_data = rankings_data.select(
